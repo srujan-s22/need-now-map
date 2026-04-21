@@ -11,6 +11,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       return NextResponse.json({ success: true, mocked: true, ...body });
     }
 
+    if (req.headers.get("x-authority") !== "unlocked") {
+      return NextResponse.json({ error: "Unauthorized access. Admin privileges required." }, { status: 403 });
+    }
+
     const docRef = doc(db, "incidents", id);
 
     await updateDoc(docRef, {

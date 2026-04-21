@@ -49,10 +49,10 @@ export function Sidebar() {
         })}
         {isUnlocked && (
           <div className="mt-6 pt-4 border-t border-border/50 px-3">
-             <div className="flex items-center gap-2 text-xs font-semibold text-green-500 bg-green-500/10 px-2 py-1.5 rounded-md">
-               <ShieldCheck className="h-4 w-4" />
-               Authority Access Verified
-             </div>
+            <div className="flex items-center gap-2 text-xs font-semibold text-green-500 bg-green-500/10 px-2 py-1.5 rounded-md">
+              <ShieldCheck className="h-4 w-4" />
+              Authority Access Verified
+            </div>
           </div>
         )}
       </nav>

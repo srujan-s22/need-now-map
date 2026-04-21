@@ -60,6 +60,7 @@ export default function LiveMapPage() {
             <IncidentDetailPanel
               incident={incidentsSource.find(i => i.id === selectedIncident.id) || selectedIncident}
               onClose={() => setSelectedIncident(null)}
+              isReadOnly={true}
             />
           </>
         )}
