@@ -583,8 +583,8 @@ export default function ReportPage() {
             {aiState === "analyzing" && (
               <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground">
                 <RotateCw className="w-10 h-10 mb-4 animate-spin text-primary" />
-                <p className="font-medium animate-pulse">Running Neural Inference...</p>
-                <p className="text-xs mt-2">Connecting to LLaMA logic core</p>
+                <p className="font-medium animate-pulse">Running Gemini Inference...</p>
+                <p className="text-xs mt-2">Analyzing with Gemini AI triage engine</p>
               </div>
             )}
 

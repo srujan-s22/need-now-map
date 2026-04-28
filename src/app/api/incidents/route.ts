@@ -3,8 +3,7 @@ import { db, hasFirebaseConfig } from "@/lib/firebase";
 import { collection, addDoc, getDocs, serverTimestamp, query, orderBy } from "firebase/firestore";
 import { Incident } from "@/types/incident";
 
-// In-memory store for non-Firebase mode — starts empty, no mock data
-let memoryIncidents: any[] = [];
+import { memoryIncidents, addMemoryIncident } from "@/lib/memoryStore";
 
 export async function GET() {
   if (!hasFirebaseConfig || !db) {
@@ -43,7 +42,7 @@ export async function POST(req: Request) {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
-      memoryIncidents = [newInc, ...memoryIncidents];
+      addMemoryIncident(newInc);
       return NextResponse.json(newInc, { status: 201 });
     }
 

@@ -40,6 +40,7 @@ export interface Incident {
   
   createdAt: string;
   updatedAt: string;
+  resolvedAt?: string;
   
   // Derived/Helpful fields for UI
   peopleAffected: number;

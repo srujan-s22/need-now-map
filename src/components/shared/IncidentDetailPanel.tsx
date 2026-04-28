@@ -266,7 +266,7 @@ export function IncidentDetailPanel({ incident, onClose, isReadOnly = false }: I
             </button>
             <button
               onClick={() => {
-                handleUpdateIncident({ status: "resolved" });
+                handleUpdateIncident({ status: "resolved", resolvedAt: new Date().toISOString() });
                 toast.success("Incident resolved and removed from active queue.");
               }}
               disabled={updating || incident.status === "resolved"}

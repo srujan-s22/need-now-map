@@ -9,13 +9,60 @@ import { IncidentCard } from "@/components/shared/IncidentCard";
 import { IncidentDetailPanel } from "@/components/shared/IncidentDetailPanel";
 import { MapWrapper } from "@/components/shared/MapWrapper";
 import { EmptyState } from "@/components/shared/EmptyState";
-import { AlertCircle, CheckCircle, Activity, Filter, ArrowDownWideNarrow, Map as MapIcon, List as ListIcon, Loader2 } from "lucide-react";
+import { AlertCircle, CheckCircle, Activity, Filter, ArrowDownWideNarrow, Map as MapIcon, List as ListIcon, Loader2, Clock } from "lucide-react";
 
 export default function DashboardPage() {
   const { incidentsSource, loadingDb } = useIncidents();
 
   const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
   const [mobileView, setMobileView] = useState<"map" | "list">("map"); // Toggle for mobile users
+
+  // Time Slider State
+  const [sliderIndex, setSliderIndex] = useState(7); // 7 is Live
+  
+  const TIME_STEPS = useMemo(() => [
+    { label: "24 hrs ago", value: 1440 },
+    { label: "12 hrs ago", value: 720 },
+    { label: "4 hrs ago", value: 240 },
+    { label: "2 hrs ago", value: 120 },
+    { label: "1 hr ago", value: 60 },
+    { label: "30 min ago", value: 30 },
+    { label: "15 min ago", value: 15 },
+    { label: "Live", value: 0 },
+  ], []);
+
+  const currentReplayStep = TIME_STEPS[sliderIndex];
+  const replayMinutesAgo = currentReplayStep.value;
+  const isReplayMode = replayMinutesAgo > 0;
+
+  // Time Filtered Array (simulating history)
+  const timeFilteredIncidents = useMemo(() => {
+    if (replayMinutesAgo === 0) return incidentsSource;
+    
+    const snapshotTime = Date.now() - replayMinutesAgo * 60000;
+    
+    return incidentsSource
+      .filter(i => new Date(i.createdAt).getTime() <= snapshotTime)
+      .map(i => {
+        const incidentSnapshot = { ...i };
+        
+        // Use resolvedAt if available, otherwise fallback to updatedAt if status is resolved
+        if (i.resolvedAt) {
+          const resolvedTime = new Date(i.resolvedAt).getTime();
+          if (resolvedTime > snapshotTime) {
+            incidentSnapshot.status = 'assigned'; // Was not resolved at this snapshot time
+            incidentSnapshot.resolvedAt = undefined;
+          }
+        } else if (i.status === 'resolved') {
+          const updatedTime = new Date(i.updatedAt).getTime();
+          if (updatedTime > snapshotTime) {
+            incidentSnapshot.status = 'assigned'; // Mocked older state
+          }
+        }
+        
+        return incidentSnapshot;
+      });
+  }, [incidentsSource, replayMinutesAgo]);
 
   // Filters
   const [zoneFilter, setZoneFilter] = useState<string>("all");
@@ -26,15 +73,15 @@ export default function DashboardPage() {
   const [sortBy, setSortBy] = useState<"severity" | "recent" | "oldest" | "confidence">("severity");
 
   // Summary Metrics Calculation
-  const totalIncidents = incidentsSource.length;
-  const redZoneCount = incidentsSource.filter(i => i.zone === 'red').length;
-  const activeCount = incidentsSource.filter(i => i.status !== 'resolved').length;
-  const resolvedCount = incidentsSource.filter(i => i.status === 'resolved').length;
-  const avgConfidence = Math.round(incidentsSource.reduce((acc, curr) => acc + curr.confidence, 0) / (totalIncidents || 1));
+  const totalIncidents = timeFilteredIncidents.length;
+  const redZoneCount = timeFilteredIncidents.filter(i => i.zone === 'red').length;
+  const activeCount = timeFilteredIncidents.filter(i => i.status !== 'resolved').length;
+  const resolvedCount = timeFilteredIncidents.filter(i => i.status === 'resolved').length;
+  const avgConfidence = Math.round(timeFilteredIncidents.reduce((acc, curr) => acc + curr.confidence, 0) / (totalIncidents || 1));
 
   // Applied Filters and Sorted array
   const filteredAndSortedIncidents = useMemo(() => {
-    let result = [...incidentsSource];
+    let result = [...timeFilteredIncidents];
 
     // Filter
     if (zoneFilter !== "all") result = result.filter(i => i.zone === zoneFilter);
@@ -51,6 +98,9 @@ export default function DashboardPage() {
     result.sort((a, b) => {
       switch (sortBy) {
         case "severity":
+          if (b.severityScore === a.severityScore) {
+            return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+          }
           return b.severityScore - a.severityScore;
         case "confidence":
           return b.confidence - a.confidence;
@@ -64,14 +114,14 @@ export default function DashboardPage() {
     });
 
     return result;
-  }, [zoneFilter, statusFilter, categoryFilter, sortBy, incidentsSource]);
+  }, [zoneFilter, statusFilter, categoryFilter, sortBy, timeFilteredIncidents]);
 
   if (loadingDb) {
     return (
       <div className="flex flex-col items-center justify-center h-[calc(100vh-4rem)]">
         <Loader2 className="w-10 h-10 animate-spin text-primary mb-4" />
         <h2 className="text-xl font-semibold">Connecting to Geospatial Frame...</h2>
-        <p className="text-muted-foreground text-sm mt-1">Establishing secure telemetry uplink via Firebase</p>
+        <p className="text-muted-foreground text-sm mt-1">Establishing secure telemetry uplink…</p>
       </div>
     );
   }
@@ -87,9 +137,15 @@ export default function DashboardPage() {
               <h1 className="text-3xl font-bold tracking-tight">Admin Dashboard</h1>
               <p className="text-muted-foreground mt-1 text-sm">Real-time geospatial telemetry and live operations queue.</p>
             </div>
-            <div className="hidden md:flex items-center gap-1.5 px-3 py-1 bg-green-500/10 border border-green-500/20 text-green-500 rounded-full text-xs font-bold uppercase tracking-wider">
-              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" /> Live System
-            </div>
+            {isReplayMode ? (
+              <div className="hidden md:flex items-center gap-1.5 px-3 py-1 bg-amber-500/10 border border-amber-500/20 text-amber-500 rounded-full text-xs font-bold uppercase tracking-wider">
+                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" /> Replay: {currentReplayStep.label}
+              </div>
+            ) : (
+              <div className="hidden md:flex items-center gap-1.5 px-3 py-1 bg-green-500/10 border border-green-500/20 text-green-500 rounded-full text-xs font-bold uppercase tracking-wider">
+                <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" /> Live System
+              </div>
+            )}
           </div>
 
           {/* Mobile view toggle */}
@@ -106,6 +162,40 @@ export default function DashboardPage() {
             >
               <ListIcon className="w-4 h-4" /> List
             </button>
+          </div>
+        </div>
+
+        {/* Replay Controls */}
+        <div className="bg-card border border-border p-4 rounded-lg shadow-sm">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium flex items-center gap-2">
+              <Clock className="w-4 h-4 text-primary" /> Incident Timeline Replay
+            </span>
+            <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">
+              Viewing: <strong className={isReplayMode ? "text-amber-500" : "text-green-500"}>{currentReplayStep.label}</strong>
+            </span>
+          </div>
+          <div className="px-2">
+            <input 
+              type="range"
+              min={0}
+              max={TIME_STEPS.length - 1}
+              step={1}
+              value={sliderIndex}
+              onChange={(e) => setSliderIndex(parseInt(e.target.value))}
+              className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer"
+            />
+            <div className="flex justify-between text-[10px] text-muted-foreground mt-2 px-1">
+              {TIME_STEPS.map((step, idx) => (
+                <span 
+                  key={idx} 
+                  className={`cursor-pointer transition-colors ${idx === sliderIndex ? "text-primary font-bold" : "hover:text-foreground"}`}
+                  onClick={() => setSliderIndex(idx)}
+                >
+                  {step.label}
+                </span>
+              ))}
+            </div>
           </div>
         </div>
 

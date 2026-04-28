@@ -1,6 +1,7 @@
 import { NextResponse, NextRequest } from "next/server";
 import { db, hasFirebaseConfig } from "@/lib/firebase";
 import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { updateMemoryIncident } from "@/lib/memoryStore";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -8,6 +9,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const body = await req.json();
 
     if (!hasFirebaseConfig || !db) {
+      updateMemoryIncident(id, body);
       return NextResponse.json({ success: true, mocked: true, ...body });
     }
 
