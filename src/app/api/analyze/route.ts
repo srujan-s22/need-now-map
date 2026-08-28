@@ -1,17 +1,22 @@
 import { NextResponse } from "next/server";
-import { triageIncident } from "@/lib/ai";
+import { runInvestigationPipeline } from "@/lib/investigationEngine";
 
 export async function POST(req: Request) {
   try {
-    const payload = await req.json();
+    const payload = await req.json().catch(() => null);
     
-    // Server-side validation could go here
-    if (!payload.title || !payload.description) {
-      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    if (!payload || typeof payload !== "object") {
+      return NextResponse.json({ error: "Invalid JSON payload" }, { status: 400 });
     }
 
-    const triageResult = await triageIncident(payload);
-    
+    if (!payload.title?.trim() || !payload.description?.trim()) {
+      return NextResponse.json(
+        { error: "Both title and description are required for triage analysis." },
+        { status: 400 }
+      );
+    }
+
+    const triageResult = await runInvestigationPipeline(payload);
     return NextResponse.json(triageResult, { status: 200 });
   } catch (error) {
     console.error("API Analysis Error:", error);

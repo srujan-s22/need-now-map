@@ -8,54 +8,70 @@ export function useIncidents() {
   const [loadingDb, setLoadingDb] = useState(true);
 
   useEffect(() => {
-    if (!hasFirebaseConfig || !db) {
-      // No Firebase configured — use the API route (memory-backed, no mocks)
-      const fetchFromApi = async () => {
-        try {
-          const res = await fetch("/api/incidents");
-          if (res.ok) {
-            const data = await res.json();
-            setIncidentsSource(data);
-          } else {
-            setIncidentsSource([]);
-          }
-        } catch {
-          setIncidentsSource([]);
-        } finally {
-          setLoadingDb(false);
-        }
-      };
+    let isMounted = true;
 
+    const fetchFromApi = async () => {
+      try {
+        const res = await fetch("/api/incidents");
+        if (res.ok && isMounted) {
+          const data = await res.json();
+          setIncidentsSource(data);
+        }
+      } catch (err) {
+        console.warn("API fetch fallback error:", err);
+      } finally {
+        if (isMounted) setLoadingDb(false);
+      }
+    };
+
+    if (!hasFirebaseConfig || !db) {
       fetchFromApi();
-      // Poll periodically since we don't have realtime listeners without Firebase
-      const interval = setInterval(fetchFromApi, 5000);
-      return () => clearInterval(interval);
+      const interval = setInterval(fetchFromApi, 4000);
+      return () => {
+        isMounted = false;
+        clearInterval(interval);
+      };
     }
 
-    // Firebase IS configured — use realtime listener, Firestore only
-    const q = query(collection(db, "incidents"), orderBy("updatedAt", "desc"));
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const data = snapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-          createdAt: doc.data().createdAt?.toDate().toISOString() || new Date().toISOString(),
-          updatedAt: doc.data().updatedAt?.toDate().toISOString() || new Date().toISOString(),
-        })) as Incident[];
+    // Try Firestore realtime listener with automatic fallback to API polling if rules/permissions block it
+    let pollingInterval: NodeJS.Timeout | null = null;
+    let unsubscribe: (() => void) | null = null;
 
-        // Always use Firestore data, even if empty
-        setIncidentsSource(data);
-        setLoadingDb(false);
-      },
-      (err) => {
-        console.warn("Firestore snapshot failed:", err);
-        setIncidentsSource([]);
-        setLoadingDb(false);
-      }
-    );
+    try {
+      const q = query(collection(db, "incidents"), orderBy("updatedAt", "desc"));
+      unsubscribe = onSnapshot(
+        q,
+        (snapshot) => {
+          if (!isMounted) return;
+          const data = snapshot.docs.map((doc) => ({
+            id: doc.id,
+            ...doc.data(),
+            createdAt: doc.data().createdAt?.toDate?.()?.toISOString() || new Date().toISOString(),
+            updatedAt: doc.data().updatedAt?.toDate?.()?.toISOString() || new Date().toISOString(),
+          })) as Incident[];
 
-    return () => unsubscribe();
+          setIncidentsSource(data);
+          setLoadingDb(false);
+        },
+        (err) => {
+          console.warn("Firestore snapshot access limited, falling back to API polling:", err.message);
+          fetchFromApi();
+          if (!pollingInterval) {
+            pollingInterval = setInterval(fetchFromApi, 4000);
+          }
+        }
+      );
+    } catch (e) {
+      console.warn("Firestore subscription failed, falling back to API:", e);
+      fetchFromApi();
+      pollingInterval = setInterval(fetchFromApi, 4000);
+    }
+
+    return () => {
+      isMounted = false;
+      if (unsubscribe) unsubscribe();
+      if (pollingInterval) clearInterval(pollingInterval);
+    };
   }, []);
 
   return { incidentsSource, loadingDb };

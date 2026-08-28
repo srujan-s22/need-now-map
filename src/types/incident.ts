@@ -8,8 +8,8 @@ export type IncidentCategory =
   | "power_outage" 
   | "supply_shortage" 
   | "trapped_people" 
-  | "medical_emergency"
-  | "hazard"
+  | "medical_emergency" 
+  | "hazard" 
   | "other";
 
 export type UrgencyLevel = "immediate" | "high" | "moderate" | "low";
@@ -27,7 +27,7 @@ export interface Incident {
   needs: string[];
   summary: string;
   bestNextAction: string;
-  confidence: number; // 0-100 indicating AI confidence when we add it later
+  confidence: number; // 0-100 deterministic overall confidence score
   
   status: IncidentStatus;
   
@@ -42,8 +42,9 @@ export interface Incident {
   updatedAt: string;
   resolvedAt?: string;
   
-  // Derived/Helpful fields for UI
+  // Derived / Operational fields
   peopleAffected: number;
+  reportedPeopleAffected?: number;
   responseTeam?: string;
   recommendedTeam?: string;
   assignmentHistory?: Array<{
@@ -52,5 +53,36 @@ export interface Incident {
     timestamp: string;
   }>;
   reasoning?: string;
-  lastUpdatedText: string;
+  lastUpdatedText?: string;
+
+  // Investigation & Audit fields
+  confidenceBreakdown?: {
+    classification: number;
+    severity: number;
+    evidence: number;
+    location: number;
+    overall: number;
+    formula?: string;
+    factors?: Array<{
+      label: string;
+      impact: "positive" | "negative" | "neutral";
+      explanation: string;
+    }>;
+  };
+  evidenceCount?: number;
+  missingEvidence?: string[];
+  contradictions?: Array<{
+    field: string;
+    reportedValue: string | number;
+    narrativeIndicatedValue: string | number;
+    operationallyConsideredValue: string | number;
+    explanation: string;
+  }>;
+  isOverridden?: boolean;
+  originalAiAssessment?: {
+    severityScore: number;
+    zone: SeverityZone;
+    urgency: UrgencyLevel;
+    recommendedTeam?: string;
+  };
 }

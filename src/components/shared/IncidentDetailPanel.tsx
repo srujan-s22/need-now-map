@@ -94,16 +94,42 @@ export function IncidentDetailPanel({ incident, onClose, isReadOnly = false }: I
               <span className="font-semibold text-xl">{incident.severityScore}<span className="text-sm text-muted-foreground">/100</span></span>
             </div>
             <div className="bg-secondary/40 p-3 rounded-lg border border-border/50">
-              <span className="text-xs text-muted-foreground flex items-center gap-1.5 mb-1"><CheckCircle className="w-3.5 h-3.5" /> System Confidence</span>
+              <span className="text-xs text-muted-foreground flex items-center gap-1.5 mb-1"><CheckCircle className="w-3.5 h-3.5" /> Evidence Confidence</span>
               <span className="font-semibold text-xl">{incident.confidence}%</span>
+              {typeof incident.evidenceCount === "number" && (
+                <span className="text-[10px] text-muted-foreground block mt-0.5">
+                  {incident.evidenceCount} verified OSM asset(s)
+                </span>
+              )}
             </div>
           </div>
+
+          {incident.confidenceBreakdown && (
+            <div className="grid grid-cols-4 gap-1.5 text-center text-xs bg-secondary/20 p-2 rounded-lg border border-border/40">
+              <div>
+                <p className="text-[9px] text-muted-foreground uppercase">Class.</p>
+                <p className="font-mono font-bold text-foreground">{incident.confidenceBreakdown.classification}%</p>
+              </div>
+              <div>
+                <p className="text-[9px] text-muted-foreground uppercase">Sever.</p>
+                <p className="font-mono font-bold text-foreground">{incident.confidenceBreakdown.severity}%</p>
+              </div>
+              <div>
+                <p className="text-[9px] text-muted-foreground uppercase">Evid.</p>
+                <p className="font-mono font-bold text-foreground">{incident.confidenceBreakdown.evidence}%</p>
+              </div>
+              <div>
+                <p className="text-[9px] text-muted-foreground uppercase">Loc.</p>
+                <p className="font-mono font-bold text-foreground">{incident.confidenceBreakdown.location}%</p>
+              </div>
+            </div>
+          )}
 
           {incident.reasoning && (
             <div className="bg-primary/5 border border-primary/10 p-4 rounded-lg relative overflow-hidden">
               <div className="absolute left-0 top-0 w-1 h-full bg-primary/40" />
               <p className="text-sm text-foreground/90 italic leading-relaxed">
-                "{incident.reasoning}"
+                &quot;{incident.reasoning}&quot;
               </p>
             </div>
           )}
