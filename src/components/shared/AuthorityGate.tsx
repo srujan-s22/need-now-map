@@ -1,7 +1,7 @@
 "use client";
 
 import { useAuthority } from "@/contexts/AuthorityContext";
-import { Lock, ShieldAlert, Key } from "lucide-react";
+import { Lock, ShieldAlert, Key, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { motion } from "framer-motion";
 
@@ -9,22 +9,36 @@ export function AuthorityGate({ children }: { children: React.ReactNode }) {
   const { isUnlocked, unlock, isInitialized } = useAuthority();
   const [passcode, setPasscode] = useState("");
   const [error, setError] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
 
   // Avoid flash of login screen if it's actually unlocked.
-  // We check isInitialized from context
-  if (!isInitialized) return null;
+  if (!isInitialized) {
+    return (
+      <div className="flex items-center justify-center h-full min-h-[calc(100vh-4rem)] bg-background">
+        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   if (isUnlocked) {
     return <>{children}</>;
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (unlock(passcode)) {
-      setError(false);
-    } else {
-      setError(true);
-      setPasscode("");
+    if (!passcode || isVerifying) return;
+
+    setIsVerifying(true);
+    setError(false);
+
+    try {
+      const success = await unlock(passcode);
+      if (!success) {
+        setError(true);
+        setPasscode("");
+      }
+    } finally {
+      setIsVerifying(false);
     }
   };
 
@@ -57,7 +71,8 @@ export function AuthorityGate({ children }: { children: React.ReactNode }) {
                 type="password"
                 placeholder="Enter access code"
                 autoFocus
-                className="w-full bg-background border border-border rounded-lg pl-10 pr-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-500/50 transition-shadow"
+                disabled={isVerifying}
+                className="w-full bg-background border border-border rounded-lg pl-10 pr-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-500/50 transition-shadow disabled:opacity-50"
                 value={passcode}
                 onChange={(e) => {
                   setPasscode(e.target.value);
@@ -78,10 +93,20 @@ export function AuthorityGate({ children }: { children: React.ReactNode }) {
 
           <button
             type="submit"
-            className="w-full flex items-center justify-center gap-2 bg-red-500 hover:bg-red-600 text-white font-medium px-4 py-3 rounded-lg transition-colors"
+            disabled={isVerifying}
+            className="w-full flex items-center justify-center gap-2 bg-red-500 hover:bg-red-600 disabled:opacity-60 text-white font-medium px-4 py-3 rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed"
           >
-            <Lock className="w-4 h-4" />
-            Verify Authorization
+            {isVerifying ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Verifying...
+              </>
+            ) : (
+              <>
+                <Lock className="w-4 h-4" />
+                Verify Authorization
+              </>
+            )}
           </button>
         </form>
 

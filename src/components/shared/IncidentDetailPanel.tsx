@@ -27,8 +27,7 @@ export function IncidentDetailPanel({ incident, onClose, isReadOnly = false }: I
       await fetch(`/api/incidents/${incident.id}`, {
         method: "PATCH",
         headers: { 
-          "Content-Type": "application/json",
-          "x-authority": typeof window !== "undefined" && sessionStorage.getItem("authority_unlocked") === "true" ? "unlocked" : "locked"
+          "Content-Type": "application/json"
         },
         body: JSON.stringify(updates)
       });
