@@ -1,6 +1,6 @@
 # Software Requirements Specification (SRS)
 ## Project Name: NeedNow Map — Intelligent Crisis Command & Triage Platform
-**Version:** 0.3.0  
+**Version:** 0.4.0 (Phase 2: Resource Intelligence & Crisis Command Center)  
 **Target Environment:** Next.js 16.2.4 (App Router, Turbopack) · React 19 · TypeScript 5 · Tailwind CSS v4  
 **Document Purpose:** Complete technical and architectural blueprint to provide context for AI agent pairing, prompt engineering, and feature expansion.
 
@@ -8,14 +8,14 @@
 
 ## 1. Executive Summary & Product Vision
 
-**NeedNow Map** is a real-time crisis management, civic reporting, and emergency dispatch orchestration platform. It is engineered to bridge civilian situational reports with municipal crisis command response units (Fire, Medical, Water Rescue, Public Works, Utility Grid).
+**NeedNow Map** is a real-time crisis management, civic reporting, and emergency dispatch orchestration platform. It operates as an **AI-Assisted Emergency Crisis Command Center** adhering to strict **decision-support principles**: AI investigates, correlates real geospatial evidence, and recommends capabilities; human dispatchers retain exclusive command authority to approve, override, and deploy.
 
 ### Key Value Propositions:
-1. **Evidence-Based AI Crisis Triage Engine**: Operates a multi-stage investigation pipeline: parses incident telemetry, plans required infrastructure searches, executes real **OpenStreetMap / Overpass** queries to discover actual nearby emergency facilities, assesses evidence quality, synthesizes facts with **Google Gemini 2.5 Flash**, and computes transparent **deterministic multi-dimensional confidence scores** purely in server-side logic.
-2. **Live SSE Investigation Telemetry & Map HUD**: Streams real-time investigation steps via Server-Sent Events (`/api/triage/stream`), rendering a live tactical activity feed and dynamic pulsating search radius overlays with real verified evidence markers on Leaflet maps.
-3. **Geospatial Command Array**: Fullscreen and dashboard-integrated Leaflet mapping with real-time incident pins, custom markers, reverse-geocoding autocomplete via OpenStreetMap Nominatim, and device GPS capture.
-4. **Temporal Playback Engine**: Command dashboard time-slider allowing dispatchers to replay incident timelines across past intervals (15m, 30m, 1h, 2h, 4h, 12h, 24h) or stay locked on live telemetries.
-5. **Resilient Dual-Tier Storage**: Hybrid persistence supporting **Cloud Firestore** for multi-client real-time synchronization, with automatic seamless failover to in-memory store if Firestore rules or connectivity are offline.
+1. **Evidence-Based AI Crisis Triage Engine**: Operates a multi-stage investigation pipeline: parses incident telemetry, plans required capabilities against a Canonical Capability Registry, executes live **OpenStreetMap / Overpass** queries to discover actual nearby emergency facilities, extracts real contact telemetry (`phone`, `website`, `address`), assesses evidence quality, synthesizes facts with **Google Gemini 2.5 Flash**, and computes transparent **deterministic multi-dimensional confidence scores** in server-side logic.
+2. **Canonical Resource Capability Registry**: 13 formally defined capabilities (`fire_suppression`, `heavy_extrication_usar`, `hazmat_containment`, `trauma_care`, `ems_transport`, `swift_water_rescue`, `traffic_perimeter`, `evacuation_support`, `power_grid_isolation`, `gas_grid_isolation`, `water_grid_isolation`, `public_works_clearing`, `critical_facility_backup`).
+3. **Zero-Hallucination Contact Extraction**: Extracts real OSM contact tags (`phone`, `website`, `addr:*`, `operator`) with field-level provenance (`OSM:phone`). Missing contacts explicitly display `Contact unmapped in dataset`.
+4. **Crisis Command Center Dashboard & Contextual Console**: 5-section Command Console with Situation Telemetry, AI Assessment Matrix, Operational Timeline, Ranked Resources Panel with direct `<a href="tel:...">Call</a>` and `<a href="..." target="_blank">Portal</a>` actions, and Human Dispatcher Override.
+5. **Interactive Tactical Map Array**: Leaflet map with layer toggles (`🚒 Fire`, `🏥 Medical`, `⚡ Utilities`, `🚔 Police`), active search radii, and single-vector tactical relationship lines connecting incidents to top recommendations.
 6. **Zero-Trust Server Authority Gate**: High-security emergency command authorization using server-side HMAC-SHA256 signed `httpOnly` session cookies and server-only `PASSCODE` verification.
 
 ---
@@ -34,9 +34,9 @@
   },
   "geospatial": {
     "mapping": "Leaflet 1.9.4 & React-Leaflet 5.0.0",
-    "tiles": "CartoDB Dark Matter / OpenStreetMap",
+    "tiles": "CartoDB Dark Matter (with MAP_KEY via /api/map-config) / Dark OSM Fallback",
     "infrastructure_queries": "OpenStreetMap Overpass API (Primary)",
-    "geocoding": "OpenStreetMap Nominatim REST API (Geocoding & Reverse only)"
+    "geocoding": "OpenStreetMap Nominatim REST API"
   },
   "ai_inference": {
     "sdk": "@google/genai 1.50.1",
@@ -60,68 +60,44 @@
 
 ---
 
-## 3. Evidence-Based Triage & Investigation Engine Architecture
+## 3. Canonical Capability Registry & Resource Ranking
 
-### 3.1 Pipeline Flow
-```
-Incident Input (Title, Description, Category, People, Lat/Lng)
-  │
-  ├─► Stage 1: Telemetry Parser & Location Precision Evaluator (GPS vs Address vs Unresolved)
-  ├─► Stage 2: Gemini Investigation Planner (Determines relevant searches & bounded radius)
-  ├─► Stage 3: Controlled Geospatial Tool Execution (OpenStreetMap Overpass API + Haversine km)
-  ├─► Stage 4: Evidence Normalization & Quality Stage (Completeness, Provenance, Contradictions)
-  ├─► Stage 5: Gemini Evidence Reasoner (Facts vs Inferences vs Acknowledged Unknowns)
-  ├─► Stage 6: Deterministic Confidence Calculator (Server-side weighted math & factor generation)
-  └─► Stage 7: SSE Event Stream Broadcast & Live Map HUD Visualization
-```
+### 3.1 Separation of Relevance vs Operational Usability
+$$\text{Relevance Score} = (\text{Capability Match} \times 0.50) + (\text{Proximity Score} \times 0.40) + (\text{Context Specificity} \times 0.10)$$
+- **Relevance**: Dictates ranking order based purely on capability match and physical proximity ($P(d) = 100 \times \exp(-0.15 \times d)$).
+- **Usability Flags**: (`hasDirectPhone`, `hasWebsite`, `hasPhysicalAddress`, `has24x7OpeningHoursTag`) inform dispatcher actions (`Call`, `Portal`) without demoting closer unmapped facilities.
 
-### 3.2 Epistemic Standards & Truth in AI
-- **Strict Evidence Provenance**: Every discovered asset retains source attribution (`OpenStreetMap / Overpass API`), query timestamp, coordinates, and exact spherical distance in km.
-- **Fact vs Inference Separation**:
-  - `FACT`: Direct citizen report telemetry and verified mapped infrastructure in the vicinity.
-  - `INFERENCE`: Operational tactical deductions based on verified facts.
-  - `UNKNOWN`: Acknowledged limitations (e.g. real-time unit readiness and active staffing load are unavailable).
-- **Proximity vs Severity Separation**: Proximity to fire stations or hospitals informs operational dispatch coverage, but does **not** artificially increase crisis severity. Severity is determined strictly by life-safety threats, casualty counts, and hazard escalation.
-
-### 3.3 Deterministic Confidence Mathematical Formula
-Final confidence is **never** generated arbitrarily by Gemini. It is computed deterministically in application code:
-
-$$\text{Base Confidence} = (\text{Classification} \times 0.30) + (\text{Severity} \times 0.25) + (\text{Evidence} \times 0.25) + (\text{Location} \times 0.20)$$
-$$\text{Overall Confidence} = \text{Clamp}_{15}^{99}\left( \text{Base Confidence} - \sum \text{Penalties} \right)$$
-
-- **Classification Confidence ($C$)**: Evaluated from description density, specific hazard terminology, and category alignment.
-- **Severity Confidence ($S$)**: Evaluated from clarity of life-safety impact indicators and hazard escalation metrics.
-- **Evidence Quality & Coverage ($E$)**: Evaluated from query execution success, mapped facility density, and source reliability.
-- **Location Precision ($L$)**: `exact_gps` = 98%, `resolved_address` = 90%, `approximate_city` = 60%, `unresolved` = 30%.
-- **Deduction Penalties**: Discrepancies ($-8\%$ per item), Missing Critical Telemetry ($-5\%$ to $-15\%$), Degraded Mode ($-15\%$).
+### 3.2 Emergency Response Resources vs Contextual Infrastructure
+- **Emergency Response Resources**: Deployable units (Fire Stations, Hospitals, Ambulance Bases, Police, Rescue Stations).
+- **Contextual Infrastructure**: Situational environmental context (Substations, Pipelines, Water Works, Depots, Hydrants) evaluated for risk assessment, but never ranked as response teams.
 
 ---
 
 ## 4. API Endpoints & Contracts
 
-### 4.1 POST `/api/triage/stream` (SSE Live Stream)
-- Request: JSON `IncidentInputPayload`
-- Response: `text/event-stream; charset=utf-8` emitting events:
-  - `step_update`: Updates investigation lifecycle steps.
-  - `search_started`: Emits search type, center `(lat, lng)`, and `radiusKm` (renders search circle on map).
-  - `evidence_found`: Emits individual verified `TriageEvidence` item (drops marker on map with distance badge).
-  - `search_completed`: Emits total items found and nearest distance.
-  - `quality_assessed`: Emits completeness and contradiction counts.
-  - `triage_complete`: Emits final `EvidenceBasedTriageResponse`.
+### 4.1 Protected Resource Intelligence Endpoint
+- **`GET /api/resources/nearby`**
+  - **Auth**: Required (`authority_session` cookie via `isAuthorized()`).
+  - **Query Params**: `lat`, `lng`, `capability` (optional), `radiusKm` (default: 10).
+  - **Response (200)**:
+    ```json
+    {
+      "lat": 12.9716,
+      "lng": 77.5946,
+      "radiusKm": 5,
+      "count": 4,
+      "resources": [ ...RankedOperationalResource[] ],
+      "retrievedAt": "2026-08-29T03:45:00.000Z",
+      "source": "OpenStreetMap / Overpass API"
+    }
+    ```
 
-### 4.2 POST `/api/triage` & POST `/api/analyze` (REST)
-- Request: JSON `IncidentInputPayload`
-- Response: Complete `EvidenceBasedTriageResponse` JSON payload.
+### 4.2 Triage & SSE Streaming
+- **`POST /api/triage/stream`**: Server-Sent Events stream emitting `step_update`, `search_started`, `evidence_found`, `resource_ranked`, `quality_assessed`, and `triage_complete`.
+- **`POST /api/triage`**: REST route returning `EvidenceBasedTriageResponse`.
 
-### 4.3 Incident Persistence Endpoints
-- `GET /api/incidents`: Fetch active queue with Firestore + memory fallback.
-- `POST /api/incidents`: Create dispatched incident with full audit fields (`confidenceBreakdown`, `evidenceCount`, `isOverridden`).
-- `PATCH /api/incidents/[id]`: Protected authority route for status / assignment changes.
-
----
-
-## 5. Security & Authority Access Control
-
-- **HMAC-SHA256 Signed Session Token**: Cryptographically signed cookie `authority_session` containing `{ role: "authority", issuedAt, expiresAt }`.
-- **Server-Only Passcode**: `PASSCODE=2222` defined strictly in `.env.local` without exposing client variables.
-- **Authority Gate Verification**: Async server-side `isAuthorized()` verification required before critical emergency modifications.
+### 4.3 Incident Lifecycle
+- **`GET /api/incidents`**: Returns all active and historic incidents.
+- **`POST /api/incidents`**: Persists new incident with attached `resources`, `capabilitiesEvaluated`, and `timeline`.
+- **`PATCH /api/incidents/[id]`**: Updates status, team assignments, or dispatcher overrides with memory fallback.
+- **`POST /api/auth/authority`**: Validates `PASSCODE` and sets `authority_session` HMAC-SHA256 cookie.

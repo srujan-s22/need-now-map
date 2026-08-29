@@ -2,6 +2,38 @@ import { IncidentCategory, SeverityZone, UrgencyLevel } from "./incident";
 
 export type LocationQuality = "exact_gps" | "resolved_address" | "approximate_city" | "unresolved";
 
+export type ResourceCapability =
+  | "fire_suppression"
+  | "heavy_extrication_usar"
+  | "hazmat_containment"
+  | "trauma_care"
+  | "ems_transport"
+  | "swift_water_rescue"
+  | "traffic_perimeter"
+  | "evacuation_support"
+  | "power_grid_isolation"
+  | "gas_grid_isolation"
+  | "water_grid_isolation"
+  | "public_works_clearing"
+  | "critical_facility_backup";
+
+export type ResourceType =
+  | "fire_station"
+  | "hospital"
+  | "ambulance_station"
+  | "police_station"
+  | "rescue_station"
+  | "water_rescue_station"
+  | "power_substation"
+  | "power_transformer"
+  | "gas_pipeline"
+  | "gasometer"
+  | "water_works"
+  | "water_utility"
+  | "public_works_depot"
+  | "hospital_facility"
+  | "emergency_resource";
+
 export type InvestigationStepType =
   | "parsing"
   | "location"
@@ -10,8 +42,11 @@ export type InvestigationStepType =
   | "hospital_search"
   | "police_search"
   | "hazard_search"
+  | "water_utility_search"
+  | "public_works_search"
   | "emergency_resource_search"
   | "evidence_normalization"
+  | "resource_ranking"
   | "quality_assessment"
   | "triage_reasoning"
   | "confidence_calculation"
@@ -34,6 +69,8 @@ export type TriageEvidenceType =
   | "police_station"
   | "hazard"
   | "emergency_resource"
+  | "water_utility"
+  | "public_works"
   | "location"
   | "population";
 
@@ -49,7 +86,54 @@ export interface TriageEvidence {
   queryStage: InvestigationStepType;
   timestamp: string;
   details?: string;
+  phone?: string;
+  phoneSource?: string;
+  website?: string;
+  websiteSource?: string;
+  address?: string;
+  addressSource?: string;
+  openingHours?: string;
+  operator?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface RankedOperationalResource {
+  id: string;
+  type: ResourceType;
+  entityKind: "emergency_response" | "contextual_infrastructure";
+  primaryCapability: ResourceCapability;
+  category: "fire" | "medical" | "police" | "utility" | "public_works" | "rescue" | "hazard";
+  name: string;
+  lat: number;
+  lng: number;
+  distanceKm: number;
+  relevanceScore: number; // 0-100 calculated deterministically
+  rank: number; // 1 = Top Recommended
+  isPrimaryRecommendation: boolean;
+
+  usability: {
+    hasDirectPhone: boolean;
+    hasWebsite: boolean;
+    hasPhysicalAddress: boolean;
+    has24x7OpeningHoursTag: boolean;
+    specializedCapabilityVerified: boolean;
+    capabilityVerificationNote?: string;
+  };
+
+  contact: {
+    phone?: string;
+    phoneSource?: string;
+    website?: string;
+    websiteSource?: string;
+    address?: string;
+    addressSource?: string;
+    operator?: string;
+    openingHours?: string;
+  };
+
+  source: "OpenStreetMap / Overpass API";
+  retrievedAt: string; // ISO Timestamp
+  recommendationReason: string[];
 }
 
 export interface ConfidenceFactor {
@@ -77,6 +161,26 @@ export interface ContradictionRecord {
   explanation: string;
 }
 
+export interface ConfidenceEngineInput {
+  title: string;
+  description: string;
+  category: IncidentCategory;
+  locationQuality: LocationQuality;
+  requiredCapabilities: ResourceCapability[];
+  capabilityCorroboration: Array<{
+    capability: ResourceCapability;
+    queryExecuted: boolean;
+    resourcesFoundCount: number;
+    nearestDistanceKm: number | null;
+    corroborationStrength: "strong" | "moderate" | "weak" | "unavailable";
+  }>;
+  evidence: TriageEvidence[];
+  rankedResources: RankedOperationalResource[];
+  missingEvidence: string[];
+  contradictions: ContradictionRecord[];
+  isDegradedMode?: boolean;
+}
+
 export interface EvidenceBasedTriageResponse {
   category: IncidentCategory;
   severityScore: number; // 0–100
@@ -102,6 +206,8 @@ export interface EvidenceBasedTriageResponse {
 
   // Investigation Telemetry & Evidence Provenance
   evidence: TriageEvidence[];
+  rankedResources: RankedOperationalResource[];
+  capabilitiesEvaluated: ResourceCapability[];
   missingEvidence: string[];
   contradictions: ContradictionRecord[];
   investigationSteps: InvestigationStep[];
@@ -119,7 +225,8 @@ export type InvestigationStreamEvent =
     }
   | {
       event: "search_started";
-      searchType: "fire_station" | "hospital" | "police_station" | "hazard" | "emergency_resource";
+      searchType: string;
+      capability?: ResourceCapability;
       center: { lat: number; lng: number };
       radiusKm: number;
       label: string;
@@ -129,11 +236,23 @@ export type InvestigationStreamEvent =
       evidence: TriageEvidence;
     }
   | {
+      event: "resource_found";
+      resource: RankedOperationalResource;
+    }
+  | {
       event: "search_completed";
       searchType: string;
+      capability?: ResourceCapability;
       itemsFound: number;
       nearestDistanceKm: number | null;
       source: string;
+    }
+  | {
+      event: "resource_ranked";
+      capability: ResourceCapability;
+      topResourceId: string;
+      topResourceName: string;
+      nearestDistanceKm: number;
     }
   | {
       event: "quality_assessed";

@@ -1,6 +1,10 @@
+import { ConfidenceBreakdown, ContradictionRecord, RankedOperationalResource } from "./investigation";
+
 export type SeverityZone = "red" | "amber" | "green";
 export type IncidentStatus = "new" | "reviewed" | "assigned" | "resolved";
+
 export type IncidentCategory = 
+  // Core Existing (100% Backward Compatible)
   | "flood" 
   | "fire" 
   | "road_blockage" 
@@ -10,9 +14,24 @@ export type IncidentCategory =
   | "trapped_people" 
   | "medical_emergency" 
   | "hazard" 
-  | "other";
+  | "other"
+  // Phase 2 Specialized Domains
+  | "water_leak"           // Non-flood water infrastructure / pipe rupture
+  | "water_rescue"         // Active water entrapment / swift water
+  | "electrical_hazard"    // Power lines down / transformer fire / grid fault
+  | "gas_leak"             // Gas main rupture / toxic vapor release
+  | "structural_collapse"  // Building collapse / USAR heavy extrication
+  | "industrial_hazard";   // Chemical spill / hazmat emergency
 
 export type UrgencyLevel = "immediate" | "high" | "moderate" | "low";
+
+export interface IncidentTimelineEvent {
+  timestamp: string;
+  stage: "reported" | "investigated" | "corroborated" | "assigned" | "overridden" | "resolved";
+  title: string;
+  description: string;
+  actor: "citizen" | "ai_pipeline" | "dispatcher";
+}
 
 export interface Incident {
   id: string;
@@ -56,28 +75,10 @@ export interface Incident {
   lastUpdatedText?: string;
 
   // Investigation & Audit fields
-  confidenceBreakdown?: {
-    classification: number;
-    severity: number;
-    evidence: number;
-    location: number;
-    overall: number;
-    formula?: string;
-    factors?: Array<{
-      label: string;
-      impact: "positive" | "negative" | "neutral";
-      explanation: string;
-    }>;
-  };
+  confidenceBreakdown?: ConfidenceBreakdown;
   evidenceCount?: number;
   missingEvidence?: string[];
-  contradictions?: Array<{
-    field: string;
-    reportedValue: string | number;
-    narrativeIndicatedValue: string | number;
-    operationallyConsideredValue: string | number;
-    explanation: string;
-  }>;
+  contradictions?: ContradictionRecord[];
   isOverridden?: boolean;
   originalAiAssessment?: {
     severityScore: number;
@@ -85,4 +86,9 @@ export interface Incident {
     urgency: UrgencyLevel;
     recommendedTeam?: string;
   };
+
+  // Phase 2 Resource Intelligence & Timeline Snapshots
+  resources?: RankedOperationalResource[];
+  timeline?: IncidentTimelineEvent[];
+  capabilitiesEvaluated?: string[];
 }

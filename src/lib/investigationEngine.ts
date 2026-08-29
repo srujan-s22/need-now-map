@@ -5,11 +5,13 @@ import {
   InvestigationStep,
   InvestigationStreamEvent,
   LocationQuality,
+  RankedOperationalResource,
+  ResourceCapability,
   TriageEvidence,
-  TriageEvidenceType,
 } from "@/types/investigation";
-import { searchNearbyInfrastructure } from "./geospatial";
+import { searchNearbyCapabilities } from "./geospatial";
 import { calculateDeterministicConfidence } from "./confidenceCalculator";
+import { CANONICAL_CAPABILITY_REGISTRY, rankOperationalResources } from "./resourceRanker";
 import { IncidentCategory, SeverityZone, UrgencyLevel } from "@/types/incident";
 
 export interface IncidentInputPayload {
@@ -31,7 +33,7 @@ function evaluateLocationQuality(payload: IncidentInputPayload): LocationQuality
   if (payload.locationSource === "browser" && payload.lat && payload.lng) {
     return "exact_gps";
   }
-  if (payload.lat && payload.lng && payload.locationSource === "suggestion") {
+  if (payload.lat && payload.lng && (payload.locationSource === "suggestion" || payload.location || payload.locationSource === "custom")) {
     return "resolved_address";
   }
   if (payload.lat && payload.lng) {
@@ -47,7 +49,6 @@ function detectContradictions(payload: IncidentInputPayload): ContradictionRecor
   const contradictions: ContradictionRecord[] = [];
   const text = (payload.description || "").toLowerCase();
 
-  // Check reported people affected vs explicit numbers in text
   const reportedCount = parseInt(String(payload.peopleAffected || "0"), 10);
   const trappedMatch = text.match(/(\d+)\s*(?:people|workers|victims|residents|families|children)?\s*(?:trapped|injured|dead|casualties|stuck)/i);
 
@@ -69,57 +70,149 @@ function detectContradictions(payload: IncidentInputPayload): ContradictionRecor
 }
 
 /**
- * Select relevance-driven infrastructure searches based on incident context.
+ * Incident-Aware Capability Planner with strict positive and negative scoping rules.
  */
-function planInvestigationSearches(payload: IncidentInputPayload): Array<{
-  type: TriageEvidenceType;
-  radiusKm: number;
-  label: string;
-}> {
+function planRequiredCapabilities(payload: IncidentInputPayload): ResourceCapability[] {
   const text = `${payload.title || ""} ${payload.description || ""} ${payload.category || ""}`.toLowerCase();
-  const searches: Array<{ type: TriageEvidenceType; radiusKm: number; label: string }> = [];
+  const category = (payload.category || "").toLowerCase();
+  const caps: ResourceCapability[] = [];
 
-  if (text.includes("fire") || text.includes("smoke") || text.includes("explosion") || text.includes("burn")) {
-    searches.push({ type: "fire_station", radiusKm: 8, label: "Nearby Fire & Rescue Stations" });
-    searches.push({ type: "hospital", radiusKm: 10, label: "Nearby Emergency Medical Facilities" });
-    if (text.includes("electric") || text.includes("wire") || text.includes("gas")) {
-      searches.push({ type: "hazard", radiusKm: 5, label: "Utility & Power Substation Infrastructure" });
-    }
-  } else if (text.includes("flood") || text.includes("water") || text.includes("drown") || text.includes("submerged")) {
-    searches.push({ type: "fire_station", radiusKm: 12, label: "Swift Water & Disaster Response Stations" });
-    searches.push({ type: "hospital", radiusKm: 12, label: "Trauma Centers & Hospitals" });
-  } else if (text.includes("medical") || text.includes("injury") || text.includes("unconscious") || text.includes("cardiac") || text.includes("bleed")) {
-    searches.push({ type: "hospital", radiusKm: 8, label: "Emergency Trauma Centers & Hospitals" });
-    searches.push({ type: "emergency_resource", radiusKm: 8, label: "Ambulance Bases & Paramedic Stations" });
-  } else if (text.includes("power") || text.includes("outage") || text.includes("blackout")) {
-    searches.push({ type: "hazard", radiusKm: 6, label: "Grid Substations & Electrical Infrastructure" });
-    searches.push({ type: "hospital", radiusKm: 10, label: "Critical Care Hospitals in Affected Sector" });
-  } else if (text.includes("road") || text.includes("block") || text.includes("tree") || text.includes("landslide")) {
-    searches.push({ type: "emergency_resource", radiusKm: 8, label: "Public Works & Traffic Response Depots" });
-    if (text.includes("crash") || text.includes("injur")) {
-      searches.push({ type: "hospital", radiusKm: 8, label: "Nearby Emergency Care Facilities" });
-    }
-  } else {
-    // General emergency baseline
-    searches.push({ type: "fire_station", radiusKm: 10, label: "Primary Fire & Emergency Services" });
-    searches.push({ type: "hospital", radiusKm: 10, label: "Regional Medical Facilities" });
+  const isExplicitlyNoInjuries =
+    text.includes("no one trapped") ||
+    text.includes("no people injured") ||
+    text.includes("no casualties") ||
+    text.includes("no injuries") ||
+    text.includes("no one injured") ||
+    text.includes("no vehicles crushed") ||
+    text.includes("or people injured") ||
+    (Number(payload.peopleAffected || 0) === 0 && !text.includes("trapped"));
+
+  const hasCasualtiesOrTrapped =
+    !isExplicitlyNoInjuries &&
+    (text.includes("trapped") ||
+      text.includes("injur") ||
+      text.includes("casualt") ||
+      text.includes("victim") ||
+      text.includes("bleeding") ||
+      text.includes("unconscious") ||
+      Number(payload.peopleAffected || 0) > 1);
+
+  // 1. Structural Collapse & Heavy Extrication (High Priority Life Safety)
+  const isStructuralCollapse =
+    category === "structural_collapse" ||
+    category === "trapped_people" ||
+    text.includes("structural collapse") ||
+    text.includes("building collapse") ||
+    text.includes("slab collapse") ||
+    text.includes("roof collapse") ||
+    text.includes("under debris") ||
+    text.includes("under rubble") ||
+    text.includes("trapped under") ||
+    text.includes("crushed under");
+
+  if (isStructuralCollapse) {
+    caps.push("heavy_extrication_usar");
+    caps.push("trauma_care");
+    caps.push("traffic_perimeter");
+    return Array.from(new Set(caps));
   }
 
-  return searches;
+  // 2. Water Leak (Municipal / Pipe) — STRICT: Never search swift water rescue boats unless drowning/trapped
+  if (category === "water_leak" || (text.includes("water leak") || text.includes("pipe rupture") || text.includes("pipeline burst") || text.includes("main burst"))) {
+    caps.push("water_grid_isolation");
+    caps.push("public_works_clearing");
+    if (hasCasualtiesOrTrapped && (text.includes("trapped") || text.includes("basement flooded"))) {
+      caps.push("fire_suppression");
+    }
+    return Array.from(new Set(caps));
+  }
+
+  // 3. Structural Fire & Electrical Hazard
+  if (category === "fire" || category === "electrical_hazard" || text.includes("fire") || text.includes("flame") || text.includes("smoke") || text.includes("explosion")) {
+    caps.push("fire_suppression");
+    if (text.includes("electric") || text.includes("substation") || text.includes("transformer") || text.includes("wire") || category === "electrical_hazard") {
+      caps.push("power_grid_isolation");
+    }
+    if (hasCasualtiesOrTrapped) {
+      caps.push("trauma_care");
+    }
+    if (text.includes("road") || text.includes("traffic") || text.includes("highway") || text.includes("avenue")) {
+      caps.push("traffic_perimeter");
+    }
+    return Array.from(new Set(caps));
+  }
+
+  // 4. Flood & Swift Water
+  if (category === "flood" || category === "water_rescue" || text.includes("flood") || text.includes("river overflow") || text.includes("drowning") || text.includes("submerged")) {
+    caps.push("swift_water_rescue");
+    caps.push("fire_suppression");
+    if (hasCasualtiesOrTrapped) {
+      caps.push("trauma_care");
+    }
+    caps.push("evacuation_support");
+    return Array.from(new Set(caps));
+  }
+
+  // 5. Medical Emergency & Injury
+  if (category === "medical_emergency" || category === "injury" || text.includes("cardiac") || text.includes("unconscious") || text.includes("overdose") || text.includes("asthma") || text.includes("stroke") || text.includes("passenger collapsed") || text.includes("chest pain")) {
+    caps.push("trauma_care");
+    caps.push("ems_transport");
+    return Array.from(new Set(caps));
+  }
+
+  // 6. Gas Leak & Industrial Hazmat
+  if (category === "gas_leak" || category === "industrial_hazard" || text.includes("gas leak") || text.includes("chemical spill") || text.includes("toxic") || text.includes("fumes")) {
+    caps.push("hazmat_containment");
+    caps.push("gas_grid_isolation");
+    caps.push("evacuation_support");
+    if (hasCasualtiesOrTrapped) {
+      caps.push("trauma_care");
+    }
+    return Array.from(new Set(caps));
+  }
+
+  // 7. Power Grid Outage
+  if (category === "power_outage" || text.includes("blackout") || text.includes("power outage")) {
+    caps.push("power_grid_isolation");
+    const hasCriticalCareNeed =
+      (text.includes("hospital") || text.includes("patient") || text.includes("oxygen") || text.includes("nursing home") || text.includes("ventilator")) &&
+      !text.includes("no hospital") &&
+      !text.includes("no care facilities");
+    if (hasCriticalCareNeed) {
+      caps.push("critical_facility_backup");
+    }
+    return Array.from(new Set(caps));
+  }
+
+  // 8. Road Blockage & Debris Clearing
+  if (category === "road_blockage" || text.includes("fallen tree") || text.includes("debris") || text.includes("landslide") || text.includes("sinkhole")) {
+    caps.push("public_works_clearing");
+    caps.push("traffic_perimeter");
+    if (hasCasualtiesOrTrapped && (text.includes("crash") || text.includes("injur") || text.includes("collision"))) {
+      caps.push("trauma_care");
+    }
+    return Array.from(new Set(caps));
+  }
+
+  // General Baseline fallback
+  caps.push("fire_suppression");
+  if (hasCasualtiesOrTrapped) caps.push("trauma_care");
+
+  return Array.from(new Set(caps));
 }
 
-const REASONING_SYSTEM_PROMPT = `You are an expert civic emergency triage intelligence reasoner in a municipal crisis command center.
+const REASONING_SYSTEM_PROMPT = `You are an expert civic emergency triage intelligence reasoner in a municipal crisis command operations center.
 Your task is to analyze an incident report alongside FACTUAL, REAL-WORLD GEOSPATIAL EVIDENCE gathered by the system.
 
 CRITICAL RULES:
 1. Distinguish between:
    - FACT: Directly reported details and verified mapped infrastructure in the input.
    - INFERENCE: Tactical deductions based on facts.
-   - UNKNOWN: Information not in the report (e.g. exact live availability, interior building layout).
+   - UNKNOWN: Information not in the report (e.g. exact live unit availability, interior building layout).
 2. DO NOT fabricate emergency units or response times.
 3. DO NOT confuse physical distance with confirmed dispatch availability. State: "[Facility] is mapped X km away; active readiness unverified."
 4. Proximity to emergency services DOES NOT increase incident severity. Severity is governed solely by life safety risks, structural hazards, and casualty potential.
-5. category must be exactly one of: flood, fire, road_blockage, injury, power_outage, supply_shortage, trapped_people, medical_emergency, hazard, other.
+5. category must be exactly one of: flood, fire, road_blockage, injury, power_outage, supply_shortage, trapped_people, medical_emergency, hazard, other, water_leak, water_rescue, electrical_hazard, gas_leak, structural_collapse, industrial_hazard.
 6. zone must be: "red" (Score 80-100, critical life hazard), "amber" (Score 45-79, major hazard/damage), "green" (Score 0-44, stable/minor).
 7. urgency must be: "immediate", "high", "moderate", "low".
 8. Return strictly valid JSON adhering to schema.`;
@@ -132,6 +225,7 @@ const triageReasoningSchema = {
       enum: [
         "flood", "fire", "road_blockage", "injury", "power_outage",
         "supply_shortage", "trapped_people", "medical_emergency", "hazard", "other",
+        "water_leak", "water_rescue", "electrical_hazard", "gas_leak", "structural_collapse", "industrial_hazard"
       ],
     },
     severityScore: { type: Type.NUMBER, description: "Severity score 0-100" },
@@ -197,115 +291,182 @@ export async function runInvestigationPipeline(
 
   updateStepStatus(parseStep, "completed", `Parsed telemetry: "${payload.title || 'Untitled'}" · Location quality: ${locationQuality}`);
 
-  // --- STAGE 2: Investigation Planning ---
-  const planStep = addStep("planning", "Investigation Planning", "Determining necessary evidence and required infrastructure parameters...");
-  const plannedSearches = planInvestigationSearches(payload);
+  // --- STAGE 2: Investigation Planning (Capability Profiling) ---
+  const planStep = addStep("planning", "Investigation Planning", "Determining required operational capabilities based on situational profile...");
+  const plannedCapabilities = planRequiredCapabilities(payload);
   updateStepStatus(
     planStep,
     "completed",
-    `Planned ${plannedSearches.length} verified infrastructure search(es): ${plannedSearches.map((s) => s.label).join(", ")}`
+    `Identified ${plannedCapabilities.length} required capability(ies): ${plannedCapabilities.map((c) => CANONICAL_CAPABILITY_REGISTRY[c]?.label || c).join(", ")}`
   );
 
-  // --- STAGE 3: Controlled Geospatial Tool Execution ---
+  // --- STAGE 3: Controlled Geospatial Capability Execution ---
   const allEvidence: TriageEvidence[] = [];
-  let geospatialSearchSuccess = true;
+  const capabilityCorroboration: Array<{
+    capability: ResourceCapability;
+    queryExecuted: boolean;
+    resourcesFoundCount: number;
+    nearestDistanceKm: number | null;
+    corroborationStrength: "strong" | "moderate" | "weak" | "unavailable";
+  }> = [];
 
-  if (payload.lat && payload.lng) {
-    // Execute all planned searches concurrently for maximum performance
-    await Promise.all(
-      plannedSearches.map(async (search) => {
+  if (payload.lat && payload.lng && plannedCapabilities.length > 0) {
+    const maxRadiusKm = Math.max(...plannedCapabilities.map((c) => CANONICAL_CAPABILITY_REGISTRY[c]?.defaultRadiusKm || 10));
+
+    // Emit search started for all planned capabilities
+    for (const cap of plannedCapabilities) {
+      const capDef = CANONICAL_CAPABILITY_REGISTRY[cap];
+      const radiusKm = capDef?.defaultRadiusKm || 10;
+      const label = capDef?.label || cap;
+
+      emit({
+        event: "search_started",
+        searchType: cap,
+        capability: cap,
+        center: { lat: payload.lat!, lng: payload.lng! },
+        radiusKm,
+        label,
+      });
+    }
+
+    const searchStep = addStep(
+      "emergency_resource_search",
+      `Querying Verified Civic & Emergency Infrastructure`,
+      `Executing unified OpenStreetMap Overpass search within ${maxRadiusKm} km radius across ${plannedCapabilities.length} capabilities...`
+    );
+
+    // Single unified Overpass query
+    const searchResult = await searchNearbyCapabilities(
+      payload.lat!,
+      payload.lng!,
+      plannedCapabilities,
+      maxRadiusKm
+    );
+
+    if (searchResult.success) {
+      const seenIds = new Set<string>();
+      for (const item of searchResult.evidence) {
+        if (!seenIds.has(item.id)) {
+          seenIds.add(item.id);
+          allEvidence.push(item);
+          emit({ event: "evidence_found", evidence: item });
+        }
+      }
+
+      // Correlate results per planned capability
+      for (const cap of plannedCapabilities) {
+        const capDef = CANONICAL_CAPABILITY_REGISTRY[cap];
+        const capRadius = capDef?.defaultRadiusKm || 10;
+        const matchingEvidence = searchResult.evidence.filter((e) => {
+          if (cap === "fire_suppression" || cap === "heavy_extrication_usar" || cap === "hazmat_containment") {
+            return e.type === "fire_station";
+          }
+          if (cap === "trauma_care" || cap === "ems_transport" || cap === "critical_facility_backup") {
+            return e.type === "hospital";
+          }
+          if (cap === "power_grid_isolation") {
+            return e.type === "hazard" || e.name.toLowerCase().includes("substation") || e.name.toLowerCase().includes("power");
+          }
+          if (cap === "gas_grid_isolation") {
+            return e.type === "hazard" || e.name.toLowerCase().includes("gas");
+          }
+          if (cap === "water_grid_isolation") {
+            return e.type === "water_utility" || e.name.toLowerCase().includes("water");
+          }
+          if (cap === "public_works_clearing") {
+            return e.type === "public_works" || e.name.toLowerCase().includes("depot");
+          }
+          return true;
+        }).filter((e) => (e.distanceKm || 0) <= capRadius);
+
+        const nearest = matchingEvidence.length > 0 ? matchingEvidence[0].distanceKm : null;
+
         emit({
-          event: "search_started",
-          searchType: search.type as any,
-          center: { lat: payload.lat!, lng: payload.lng! },
-          radiusKm: search.radiusKm,
-          label: search.label,
+          event: "search_completed",
+          searchType: cap,
+          capability: cap,
+          itemsFound: matchingEvidence.length,
+          nearestDistanceKm: nearest ?? null,
+          source: "OpenStreetMap / Overpass API",
         });
 
-        const searchStep = addStep(
-          search.type === "fire_station"
-            ? "fire_station_search"
-            : search.type === "hospital"
-            ? "hospital_search"
-            : "hazard_search",
-          `Querying ${search.label}`,
-          `Executing OpenStreetMap Overpass search within ${search.radiusKm} km radius...`
-        );
+        capabilityCorroboration.push({
+          capability: cap,
+          queryExecuted: true,
+          resourcesFoundCount: matchingEvidence.length,
+          nearestDistanceKm: nearest ?? null,
+          corroborationStrength: matchingEvidence.length > 0 ? "strong" : "moderate",
+        });
+      }
 
-        const searchResult = await searchNearbyInfrastructure(
-          payload.lat!,
-          payload.lng!,
-          [search.type],
-          search.radiusKm
-        );
+      updateStepStatus(
+        searchStep,
+        "completed",
+        `Discovered ${allEvidence.length} verified asset(s) across ${plannedCapabilities.length} capabilities from OpenStreetMap.`
+      );
+    } else {
+      for (const cap of plannedCapabilities) {
+        capabilityCorroboration.push({
+          capability: cap,
+          queryExecuted: false,
+          resourcesFoundCount: 0,
+          nearestDistanceKm: null,
+          corroborationStrength: "unavailable",
+        });
+      }
 
-        if (searchResult.success) {
-          for (const item of searchResult.evidence) {
-            allEvidence.push(item);
-            emit({ event: "evidence_found", evidence: item });
-          }
-
-          const nearest = searchResult.evidence.length > 0 ? searchResult.evidence[0].distanceKm : null;
-          emit({
-            event: "search_completed",
-            searchType: search.type,
-            itemsFound: searchResult.evidence.length,
-            nearestDistanceKm: nearest ?? null,
-            source: "OpenStreetMap / Overpass API",
-          });
-
-          updateStepStatus(
-            searchStep,
-            "completed",
-            `Found ${searchResult.evidence.length} verified ${search.type.replace('_', ' ')} asset(s). ${
-              nearest ? `Nearest: ${nearest} km away.` : "No mapped units in immediate radius."
-            }`
-          );
-        } else {
-          geospatialSearchSuccess = false;
-          emit({
-            event: "search_completed",
-            searchType: search.type,
-            itemsFound: 0,
-            nearestDistanceKm: null,
-            source: "OpenStreetMap / Overpass API (Unavailable)",
-          });
-
-          updateStepStatus(
-            searchStep,
-            "degraded",
-            `Geospatial query for ${search.label} was unavailable. Continuing with degraded evidence model.`
-          );
-        }
-      })
-    );
+      updateStepStatus(
+        searchStep,
+        "failed",
+        `Overpass dataset query limited: ${searchResult.error || "Network unreachable"}. Operating in safe degraded fallback.`
+      );
+    }
   } else {
-    geospatialSearchSuccess = false;
     addStep("location", "Location Unverified", "Cannot perform precise nearby infrastructure query without valid geographic coordinates.", "degraded");
   }
 
-  // --- STAGE 4: Evidence Quality Assessment ---
+  // --- STAGE 4: Deterministic Resource Ranking ---
+  const rankingStep = addStep("resource_ranking", "Deterministic Resource Ranking", "Evaluating capability relevance, proximity vectors, and verified contact telemetry...");
+  const rankedResources: RankedOperationalResource[] = rankOperationalResources(allEvidence, plannedCapabilities);
+
+  // Emit ranked events
+  for (const cap of plannedCapabilities) {
+    const topForCap = rankedResources.find((r) => r.primaryCapability === cap && r.isPrimaryRecommendation);
+    if (topForCap) {
+      emit({
+        event: "resource_ranked",
+        capability: cap,
+        topResourceId: topForCap.id,
+        topResourceName: topForCap.name,
+        nearestDistanceKm: topForCap.distanceKm,
+      });
+    }
+  }
+
+  updateStepStatus(rankingStep, "completed", `Ranked ${rankedResources.length} mapped resource(s) across ${plannedCapabilities.length} required capability(ies).`);
+
+  // --- STAGE 5: Evidence Quality Assessment ---
   const qualityStep = addStep("quality_assessment", "Evidence Quality Assessment", "Assessing evidence completeness, source provenance, and telemetry corroboration...");
   const missingEvidence: string[] = [];
 
-  if (allEvidence.length === 0 && payload.lat && payload.lng) {
-    missingEvidence.push("No mapped emergency facilities returned by OpenStreetMap within current search radius");
+  if (rankedResources.length === 0 && payload.lat && payload.lng) {
+    missingEvidence.push("No matching resources returned by queried OpenStreetMap tags within search perimeter");
   }
   if (locationQuality === "approximate_city" || locationQuality === "unresolved") {
     missingEvidence.push("Exact street-level coordinates unverified");
   }
-  missingEvidence.push("Live real-time unit readiness and staffing load unavailable");
+  missingEvidence.push("Live real-time unit readiness, staffing, and active call load unmonitored in public dataset");
 
   emit({
     event: "quality_assessed",
-    completenessScore: allEvidence.length > 0 ? 88 : 45,
+    completenessScore: rankedResources.length > 0 ? 90 : 45,
     missingCount: missingEvidence.length,
     contradictionCount: contradictions.length,
   });
-  updateStepStatus(qualityStep, "completed", `Quality assessment complete · ${allEvidence.length} evidence point(s) verified`);
+  updateStepStatus(qualityStep, "completed", `Quality assessment complete · ${rankedResources.length} operational asset(s) corroborated`);
 
-  // --- STAGE 5: Gemini Evidence Reasoner (or Deterministic Fallback) ---
-  const reasonStep = addStep("triage_reasoning", "Evidence-Based AI Reasoning", "Synthesizing verified factual evidence and determining tactical triage recommendation...");
+  // --- STAGE 6: Gemini Evidence Reasoner (or Deterministic Fallback) ---
+  const reasonStep = addStep("triage_reasoning", "Evidence-Based AI Reasoning", "Synthesizing verified factual evidence and formulating tactical command directives...");
 
   const apiKey = process.env.GEMINI_API_KEY;
   const modelName = process.env.GEMINI_MODEL || "gemini-2.5-flash";
@@ -329,10 +490,10 @@ export async function runInvestigationPipeline(
     try {
       const ai = new GoogleGenAI({ apiKey });
 
-      const evidenceSummary = allEvidence.length > 0
-        ? allEvidence
+      const evidenceSummary = rankedResources.length > 0
+        ? rankedResources
             .slice(0, 8)
-            .map((e) => `- [${e.type.toUpperCase()}] ${e.name} — Located ${e.distanceKm} km away (Source: ${e.source})`)
+            .map((e) => `- [${e.primaryCapability.toUpperCase()}] ${e.name} — Located ${e.distanceKm} km away (Source: ${e.source}${e.contact.phone ? `, Phone: ${e.contact.phone}` : ''})`)
             .join("\n")
         : "No external facilities verified in current query.";
 
@@ -343,6 +504,7 @@ INCIDENT TELEMETRY:
 - Location Label: ${payload.location || "Unspecified"} (${payload.lat ?? 'N/A'}, ${payload.lng ?? 'N/A'}) - Location Quality: ${locationQuality}
 - People Affected: ${reportedPeople} reported (${operationalPeople} considered for safety)
 - Description: ${payload.description || "No description provided."}
+- Required Capabilities Identified: ${plannedCapabilities.join(", ")}
 
 VERIFIED GEOSPATIAL EVIDENCE (OpenStreetMap):
 ${evidenceSummary}
@@ -350,7 +512,7 @@ ${evidenceSummary}
 CONTRADICTIONS IDENTIFIED:
 ${contradictions.length > 0 ? contradictions.map((c) => `- ${c.explanation}`).join("\n") : "None."}
 
-MISSING TELEMETRY:
+MISSING TELEMETRY & LIMITATIONS:
 ${missingEvidence.map((m) => `- ${m}`).join("\n")}
 `;
 
@@ -401,7 +563,17 @@ ${missingEvidence.map((m) => `- ${m}`).join("\n")}
   // Fallback Rule Engine if AI was degraded
   if (isDegradedMode) {
     const text = `${payload.title || ""} ${payload.description || ""}`.toLowerCase();
-    if (text.includes("fire") || text.includes("smoke") || text.includes("explosion")) {
+    if (text.includes("water leak") || text.includes("pipe") || payload.category === "water_leak") {
+      reasonedCategory = "water_leak";
+      reasonedSeverity = 52;
+      reasonedZone = "amber";
+      reasonedUrgency = "moderate";
+      recommendedTeam = "Municipal Water Works Repair Crew";
+      reasonedNeeds = ["Main Line Valve Key", "Submersible Sump Pump", "Pipe Replacement Clamp"];
+      reasonedAction = "Dispatch water utility crew to isolate municipal valve zone and assess roadway damage.";
+      factsIdentified = ["Water pipe rupture/leak reported in narrative"];
+      inferencesMade = ["Localized water disruption; swift water rescue boats not required"];
+    } else if (text.includes("fire") || text.includes("smoke") || text.includes("explosion") || payload.category === "fire") {
       reasonedCategory = "fire";
       reasonedSeverity = 92;
       reasonedZone = "red";
@@ -409,17 +581,19 @@ ${missingEvidence.map((m) => `- ${m}`).join("\n")}
       recommendedTeam = "Fire & Rescue Task Force";
       reasonedNeeds = ["Fire Suppression Engine", "Water Tender", "Paramedic Unit"];
       reasonedAction = "Establish 200m safety perimeter and deploy primary structural fire suppression.";
-      factsIdentified = ["Fire/smoke telemetry reported in narrative"];
+      factsIdentified = ["Active fire telemetry reported in narrative"];
       inferencesMade = ["Imminent structural and life-safety danger"];
-    } else if (text.includes("trapped") || text.includes("collapse")) {
-      reasonedCategory = "trapped_people";
-      reasonedSeverity = 95;
+    } else if (text.includes("collapse") || text.includes("trapped") || payload.category === "structural_collapse") {
+      reasonedCategory = "structural_collapse";
+      reasonedSeverity = 96;
       reasonedZone = "red";
       reasonedUrgency = "immediate";
       recommendedTeam = "Urban Search & Rescue (USAR)";
-      reasonedNeeds = ["Heavy Extrication Tools", "Search K-9 Unit", "Advanced Life Support Unit"];
-      reasonedAction = "Initiate acoustic search and structural stabilization protocols.";
-    } else if (text.includes("flood") || text.includes("water")) {
+      reasonedNeeds = ["Hydraulic Extrication Spreader", "Acoustic Search K-9 Unit", "Advanced Life Support Unit"];
+      reasonedAction = "Initiate acoustic search grid and structural shoring protocols.";
+      factsIdentified = ["Structural collapse/trapped victims reported"];
+      inferencesMade = ["High casualty risk requiring heavy extrication"];
+    } else if (text.includes("flood") || payload.category === "flood") {
       reasonedCategory = "flood";
       reasonedSeverity = 84;
       reasonedZone = "red";
@@ -428,10 +602,10 @@ ${missingEvidence.map((m) => `- ${m}`).join("\n")}
       reasonedNeeds = ["Inflatable Rescue Boats", "Life Vests", "Mobile Water Pumps"];
       reasonedAction = "Deploy swift-water rescue assets and establish high-ground collection point.";
     }
-    unknownsAcknowledged = ["Real-time responder availability unavailable", "Detailed structural blueprints unavailable"];
+    unknownsAcknowledged = ["Real-time unit availability unverified", "Detailed structural blueprints unavailable"];
   }
 
-  // --- STAGE 6: Deterministic Confidence Calculation ---
+  // --- STAGE 7: Deterministic Confidence Calculation ---
   const confStep = addStep("confidence_calculation", "Calculating Evidence-Based Confidence", "Executing server-side deterministic mathematical confidence engine...");
 
   const confidenceBreakdown = calculateDeterministicConfidence({
@@ -439,17 +613,18 @@ ${missingEvidence.map((m) => `- ${m}`).join("\n")}
     description: payload.description || "",
     category: reasonedCategory,
     locationQuality,
+    requiredCapabilities: plannedCapabilities,
+    capabilityCorroboration,
     evidence: allEvidence,
+    rankedResources,
     missingEvidence,
     contradictions,
-    searchSuccess: geospatialSearchSuccess,
-    searchesAttempted: plannedSearches.length,
     isDegradedMode,
   });
 
   updateStepStatus(confStep, "completed", `Calculated overall confidence: ${confidenceBreakdown.overall}% (${confidenceBreakdown.formula})`);
 
-  // --- STAGE 7: Final Result Assembly ---
+  // --- STAGE 8: Final Result Assembly ---
   const finalResult: EvidenceBasedTriageResponse = {
     category: reasonedCategory,
     severityScore: reasonedSeverity,
@@ -468,6 +643,8 @@ ${missingEvidence.map((m) => `- ${m}`).join("\n")}
     estimatedPeopleAffected: operationalPeople,
     reportedPeopleAffected: reportedPeople,
     evidence: allEvidence,
+    rankedResources,
+    capabilitiesEvaluated: plannedCapabilities,
     missingEvidence,
     contradictions,
     investigationSteps: steps,

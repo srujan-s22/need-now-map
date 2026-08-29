@@ -22,14 +22,19 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       return NextResponse.json({ success: true, mocked: true, ...body });
     }
 
-    const docRef = doc(db, "incidents", id);
-
-    await updateDoc(docRef, {
-      ...body,
-      updatedAt: serverTimestamp(),
-    });
-
-    return NextResponse.json({ success: true });
+    try {
+      const docRef = doc(db, "incidents", id);
+      await updateDoc(docRef, {
+        ...body,
+        updatedAt: serverTimestamp(),
+      });
+      updateMemoryIncident(id, body);
+      return NextResponse.json({ success: true });
+    } catch (firestoreErr) {
+      console.warn("Firestore updateDoc failed, updating memoryStore fallback:", firestoreErr);
+      updateMemoryIncident(id, body);
+      return NextResponse.json({ success: true, fallback: true, ...body });
+    }
   } catch (error) {
     console.error("PATCH Incident Error:", error);
     return NextResponse.json({ error: "Failed to update incident" }, { status: 500 });

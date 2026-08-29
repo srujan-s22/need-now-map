@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import L from "leaflet";
 import { MapContainer, TileLayer, Marker, Circle, Popup, useMap } from "react-leaflet";
 import { TriageEvidence } from "@/types/investigation";
+import { useMapConfig } from "@/hooks/useMapConfig";
 import "leaflet/dist/leaflet.css";
 
 interface MiniMapProps {
@@ -64,6 +65,8 @@ export default function MiniMap({
 }: MiniMapProps) {
   const position: L.LatLngTuple = [lat, lng];
 
+  const { tileUrl } = useMapConfig();
+
   // Primary Incident Marker
   const incidentIcon = L.divIcon({
     html: `
@@ -95,6 +98,14 @@ export default function MiniMap({
       bg = "bg-blue-600/95";
       symbol = "🚔";
       ringColor = "ring-blue-400";
+    } else if (type === "water_utility") {
+      bg = "bg-cyan-600/95";
+      symbol = "🚰";
+      ringColor = "ring-cyan-400";
+    } else if (type === "public_works") {
+      bg = "bg-yellow-600/95";
+      symbol = "🏗️";
+      ringColor = "ring-yellow-400";
     }
 
     const distLabel = distanceKm !== undefined ? `${distanceKm} km` : "";
@@ -117,13 +128,17 @@ export default function MiniMap({
   };
 
   // Search radius color styling
-  const radiusColor = activeSearchType === "fire_station"
+  const radiusColor = activeSearchType === "fire_station" || activeSearchType === "fire_suppression"
     ? "#f97316"
-    : activeSearchType === "hospital"
+    : activeSearchType === "hospital" || activeSearchType === "trauma_care"
     ? "#10b981"
-    : activeSearchType === "police_station"
+    : activeSearchType === "police_station" || activeSearchType === "traffic_perimeter"
     ? "#3b82f6"
-    : "#eab308";
+    : activeSearchType === "water_grid_isolation"
+    ? "#06b6d4"
+    : activeSearchType === "public_works_clearing"
+    ? "#eab308"
+    : "#a855f7";
 
   return (
     <div className={`w-full ${heightClassName} rounded-xl overflow-hidden border border-border shadow-inner relative z-0`}>
@@ -136,7 +151,7 @@ export default function MiniMap({
       >
         <TileLayer
           attribution='&copy; <a href="https://carto.com/attributions">CARTO</a>'
-          url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+          url={tileUrl}
         />
 
         <MapViewController
@@ -191,6 +206,11 @@ export default function MiniMap({
                   <p className="text-[10px] text-muted-foreground">
                     Source: {item.source}
                   </p>
+                  {item.phone && (
+                    <p className="text-[10px] text-emerald-400 font-mono flex items-center gap-1">
+                      <span>📞 {item.phone}</span>
+                    </p>
+                  )}
                   <p className="text-[9px] text-muted-foreground font-mono">
                     {item.lat.toFixed(4)}, {item.lng.toFixed(4)}
                   </p>

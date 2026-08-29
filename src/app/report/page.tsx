@@ -465,6 +465,30 @@ export default function ReportPage() {
     setIsSubmitting(true);
 
     try {
+      const initialTimeline = [
+        {
+          timestamp: new Date().toISOString(),
+          stage: "reported" as const,
+          title: "Incident Ingested",
+          description: `Report submitted via Citizen Intake Telemetry (Category: ${triageResult.category})`,
+          actor: "citizen" as const,
+        },
+        {
+          timestamp: new Date().toISOString(),
+          stage: "investigated" as const,
+          title: "Geospatial Investigation Completed",
+          description: `Corroborated ${triageResult.evidence.length} OpenStreetMap assets across ${triageResult.capabilitiesEvaluated?.length || 0} capabilities`,
+          actor: "ai_pipeline" as const,
+        },
+        {
+          timestamp: new Date().toISOString(),
+          stage: "corroborated" as const,
+          title: "Deterministic Confidence Computed",
+          description: `Confidence score established at ${triageResult.confidence}%`,
+          actor: "ai_pipeline" as const,
+        },
+      ];
+
       const finalPayload = {
         title: formData.title,
         category: triageResult.category,
@@ -488,6 +512,9 @@ export default function ReportPage() {
         recommendedTeam: triageResult.recommendedTeam,
         reasoning: triageResult.reasoning,
         isOverridden: isEditingTriage,
+        resources: triageResult.rankedResources || [],
+        capabilitiesEvaluated: triageResult.capabilitiesEvaluated || [],
+        timeline: initialTimeline,
       };
 
       const res = await fetch("/api/incidents", {
